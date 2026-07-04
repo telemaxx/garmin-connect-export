@@ -118,8 +118,6 @@ URL_GC_GPX_ACTIVITY = f'{GARMIN_BASE_URL}/download-service/export/gpx/activity/'
 URL_GC_TCX_ACTIVITY = f'{GARMIN_BASE_URL}/download-service/export/tcx/activity/'
 URL_GC_ORIGINAL_ACTIVITY = f'{GARMIN_BASE_URL}/download-service/files/activity/'
 
-total_copied_files = 0
-total_skipped_files = 0
 
 class GarminException(Exception):
     """Exception for problems with Garmin Connect (connection, data consistency etc)."""
@@ -480,12 +478,7 @@ def parse_arguments(argv):
     parser.add_argument('-ss', '--session', metavar='DIRECTORY',
         help='enable loading and storing SSO information from/to given directory')
     # fmt: on
-    parser.add_argument('-w', '--workflowdirectory', nargs='?', default="",
-        help="if downloading activity(format: 'original' and --unzip): copy the file, given a friendly filename, to this directory (default: not copying)")
-    parser.add_argument('--wdesc', type=int, nargs='?', const=20, default=20,
-        help='append the activity\'s description to the file name of the workflow file; limit size if number is given, default 20') 
-    parser.add_argument('--wdevice', type=int, nargs='?', const=10, default=10,
-        help='append the activity\'s device-name to the file name of the workflow file; limit size if number is given, default 10')     
+
     return parser.parse_args(argv[1:])
 
 
@@ -749,7 +742,7 @@ def load_gear(activity_id, args):
         return None
 
 
-def export_data_file(activity_id, activity_details, args, file_time, append_desc, date_time, friendly_filename):
+def export_data_file(activity_id, activity_details, args, file_time, append_desc, date_time):
     """
     Write the data of the activity to a file, depending on the chosen data format
 
@@ -765,9 +758,6 @@ def export_data_file(activity_id, activity_details, args, file_time, append_desc
     :param date_time:        datetime in ISO format used for '--fileprefix' and '--subdir' options
     :return:                 True if the file was written, False if the file existed already
     """
-    copied_files = 0
-    skipped_files = 0
-    
     # Time dependent subdirectory for activity files, e.g. '{YYYY}'
     if args.subdir is not None:
         directory = resolve_path(args.directory, args.subdir, date_time)
@@ -809,9 +799,8 @@ def export_data_file(activity_id, activity_details, args, file_time, append_desc
     if os.path.isfile(data_filename):
         logging.debug('Data file for %s already exists', activity_id)
         print('\tData file already exists; skipping...')
-        skipped_files = 1
         # Inform the main program that the file already exists
-        return False, copied_files, skipped_files
+        return False
 
     # Regardless of unzip setting, don't redownload if the ZIP or FIT/GPX/TCX original file exists.
     if args.format == 'original' and (
@@ -822,8 +811,7 @@ def export_data_file(activity_id, activity_details, args, file_time, append_desc
         logging.debug('Original data file for %s already exists', activity_id)
         print('\tOriginal data file already exists; skipping...')
         # Inform the main program that the file already exists
-        skipped_files = 1
-        return False, copied_files, skipped_files
+        return False
 
     if args.format != 'json':
         # Download the data file from Garmin Connect. If the download fails (e.g., due to timeout),
@@ -883,10 +871,6 @@ def export_data_file(activity_id, activity_details, args, file_time, append_desc
                         new_name = os.path.join(directory, f'{prefix}activity_{name_base}{append_desc}{name_ext}')
                         logging.debug('renaming %s to %s', unzipped_name, new_name)
                         os.rename(unzipped_name, new_name)
-                        if len(args.workflowdirectory):
-                            shutil.copyfile(os.path.join(args.directory, new_name), os.path.join(args.workflowdirectory, friendly_filename + name_ext))
-                            logging.info('copy workflow file to: ' + args.workflowdirectory + '/' + friendly_filename)
-                            copied_files = 1
                         if file_time:
                             os.utime(new_name, (file_time, file_time))
             else:
@@ -894,7 +878,7 @@ def export_data_file(activity_id, activity_details, args, file_time, append_desc
             os.remove(data_filename)
 
     # Inform the main program that the file is new
-    return True, copied_files, skipped_files
+    return True
 
 
 def setup_logging(args):
@@ -1166,12 +1150,6 @@ def process_activity_item(item, number_of_items, device_dict, type_filter, activ
     :param csv_filter:         object encapsulating CSV file access
     :param args:               command-line arguments
     """
-    
-    global total_copied_files
-    global total_skipped_files
-    #total_copied_files = 0
-    #total_skipped_files = 0 
-    
     current_index = item['index'] + 1
     actvty = item['activity']
     action = item['action']
@@ -1242,13 +1220,6 @@ def process_activity_item(item, number_of_items, device_dict, type_filter, activ
 
     extract['device'] = extract_device(device_dict, details, start_time_seconds, args, http_req_as_string, write_to_file)
 
-    workflow_prefix = "{}-".format(actvty['startTimeLocal'])
-    if (isinstance(workflow_prefix,bytes)):
-        workflow_prefix = workflow_prefix.decode('utf8')
-    workflow_prefix = "{}-".format(actvty['startTimeLocal'].replace("-", "").replace(":", "").replace(" ", "-"))
-    friendly_filename = workflow_prefix + sanitize_filename(actvty['activityName'] , args.wdesc) + '_' + sanitize_filename(extract['device'] , args.wdevice)
-    #print('friendly_filename: '+ friendly_filename)
-
     # try to get the JSON with all the samples (not all activities have it...),
     # but only if it's really needed for the CSV output
     extract['samples'] = None
@@ -1276,17 +1247,11 @@ def process_activity_item(item, number_of_items, device_dict, type_filter, activ
     if csv_filter.is_column_active('hrZone1Low') or csv_filter.is_column_active('hrZone1Seconds'):
         extract['hrZones'] = load_zones(str(actvty['activityId']), start_time_seconds, args, http_req_as_string, write_to_file)
 
-    # Save the file and inform if it already existed. If the file already existed, do not apped the record to the csv
-    
-    #searchme
-    export_ok, copied_files, skipped_files = export_data_file( str(actvty['activityId']), activity_details, args, start_time_seconds, append_desc, actvty['startTimeLocal'], friendly_filename)
-    if export_ok == True:
-        total_copied_files += copied_files
-        #print('export ok')
-        #print('skipped files: ' + str(total_skipped_files))
-        #print('copied files: ' + str(total_copied_files))
-    else:
-        total_skipped_files += skipped_files        # Write stats to CSV.
+    # Save the file and inform if it already existed. If the file already existed, do not append the record to the csv
+    if export_data_file(
+        str(actvty['activityId']), activity_details, args, start_time_seconds, append_desc, actvty['startTimeLocal']
+    ):
+        # Write stats to CSV.
         csv_write_record(csv_filter, extract, actvty, details, activity_type_name, event_type_name)
 
 
@@ -1394,14 +1359,6 @@ def main(argv):
                 raise
 
     logging.info('CSV file written.')
-    
-    print("Total Requested.........." + str(total_to_download))
-    #searchme
-    #print("Total Downloaded........." + str(total_successfully_downloaded))
-    #print("Total Copied(workflow)..." + str(total_copied))
-    #print("Total Skipped............" + str(total_skipped))
-    print('skipped files: ' + str(total_skipped_files))
-    print('copied files: ' + str(total_copied_files))
 
     if args.external:
         print('Open CSV output.')
