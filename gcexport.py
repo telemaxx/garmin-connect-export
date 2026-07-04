@@ -32,6 +32,7 @@ import string
 import sys
 import unicodedata
 import zipfile
+import shutil
 from datetime import datetime, timedelta, timezone
 from getpass import getpass
 from math import floor
